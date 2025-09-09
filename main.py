@@ -250,7 +250,7 @@ if years_for_multi and box_metric_multi:
         st.altair_chart(box_multi, use_container_width=True)
 
 # =========================
-# 연평균 회귀 (연도 단위) + 학습구간 슬라이더 + 미래예측(빨간점+라벨)
+# 연평균 회귀 (연도 단위) + 학습구간 슬라이더 + 미래예측(마지막 해만 빨간점)
 # =========================
 st.header("📈 연평균 선형 회귀 — X=연도, Y=선택지표(연평균)")
 target_choices = [c for c in ["tavg", "temp", "tmean", "avg_temp", "평균기온", "tmax", "최고기온", "tmin", "최저기온"] if c in num_cols] or num_cols
@@ -315,7 +315,7 @@ else:
         base_chart = pts + regline
 
         # 🔮 미래 예측: 완전한 마지막 해 + 1 ~ 2100
-        st.subheader("🔮 미래 예측 (빨간 점 + 값 레이블)")
+        st.subheader("🔮 미래 예측 (마지막 해만 빨간 점 + 레이블)")
 
         max_dt = df_daily["date"].dropna().max()
         if pd.isna(max_dt):
@@ -326,12 +326,11 @@ else:
             last_complete_year = max_dt.year if max_dt >= last_day else (max_dt.year - 1)
             start_pred_year = min(max(last_complete_year + 1, min_y), 2100)
 
-            # 예측 구간(슬라이더)
             if start_pred_year > 2100:
                 st.warning("예측 시작 연도가 2100을 초과합니다. 더 최근 데이터가 필요합니다.")
                 st.altair_chart(base_chart, use_container_width=True)
             else:
-                # 단일 연도 예측
+                # 단일 연도 예측(그 연도만 표시)
                 year_to_predict = st.number_input(
                     "단일 연도 예측",
                     min_value=int(start_pred_year), max_value=2100,
@@ -343,29 +342,34 @@ else:
                     st.success(f"📌 {year_to_predict}년 예상 {target_col} = **{pred_single:.2f}**")
                     single_df = pd.DataFrame({"year": [year_to_predict], "pred": [pred_single], "label": [f"{pred_single:.2f}"]})
 
-                # 구간 예측(슬라이더)
+                # 구간 예측(슬라이더): 마지막 해만 빨간 점
                 yr_min = int(start_pred_year); yr_max = 2100
                 yr_range = st.slider("예측 구간(연도 범위)", min_value=yr_min, max_value=yr_max,
                                      value=(yr_min, min(yr_min+20, yr_max)), step=1)
+
                 future_years = pd.DataFrame({"year": list(range(yr_range[0], yr_range[1] + 1))})
                 future_years["pred"] = model.predict(future_years[["year"]])
                 future_years["label"] = future_years["pred"].map(lambda v: f"{v:.2f}")
 
-                # 시각화: 점선 예측선 + 빨간 점 + 값 레이블
+                # 점선 예측선
                 chart_future_line = alt.Chart(future_years).mark_line(strokeDash=[5,5], color="gray").encode(
                     x=alt.X("year:O", title="연도"),
                     y=alt.Y("pred:Q", title=f"연평균 {target_col} (예측)")
                 )
-                chart_future_points = alt.Chart(future_years).mark_point(color="red", size=80).encode(
-                    x="year:O", y="pred:Q"
+
+                # ✔ 마지막 해만 빨간 점 + 레이블
+                last_year = int(future_years["year"].max())
+                last_df = future_years[future_years["year"] == last_year]
+                last_point = alt.Chart(last_df).mark_point(color="red", size=120).encode(
+                    x=alt.X("year:O"), y=alt.Y("pred:Q")
                 )
-                chart_future_labels = alt.Chart(future_years).mark_text(dy=-12, color="red").encode(
-                    x="year:O", y="pred:Q", text="label:N"
+                last_label = alt.Chart(last_df).mark_text(dy=-14, color="red").encode(
+                    x=alt.X("year:O"), y=alt.Y("pred:Q"), text="label:N"
                 )
 
-                charts = base_chart + chart_future_line + chart_future_points + chart_future_labels
+                charts = base_chart + chart_future_line + last_point + last_label
 
-                # 단일 연도 예측 점/라벨 추가(버튼 눌렀을 때)
+                # 단일 연도 예측 버튼을 눌렀다면 그 해도 빨간 점/라벨(요청과 충돌하지 않음: '구간'은 마지막 해만, '단일'은 단일만)
                 if single_df is not None:
                     single_point = alt.Chart(single_df).mark_point(color="red", size=120).encode(
                         x=alt.X("year:O"), y=alt.Y("pred:Q")
@@ -387,5 +391,5 @@ st.markdown("""
 - 히스토그램으로 전체 분포를, 월별 박스플랏으로 연도 간 계절 분포의 차이를 살펴보세요.  
 - "월→여러 연도 박스플랏"으로 특정 월의 연도별 분포를 한눈에 비교할 수 있습니다.  
 - 학습 구간 슬라이더로 회귀선이 어떻게 바뀌는지(추세 추정의 민감도)를 실습해 보세요.  
-- 미래 예측은 **마지막 ‘완전한’ 연도 다음 해부터** 2100년까지 허용하며, 예측값은 **빨간 점 + 레이블**로 표시됩니다.
+- 미래 예측은 **마지막 ‘완전한’ 연도 다음 해부터** 2100년까지 허용하며, 예측 시각화는 **예측 구간의 '마지막 해'만** 빨간 점과 레이블로 표시됩니다.
 """)
