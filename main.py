@@ -149,4 +149,129 @@ except Exception:
 # EDA (일 단위)
 # =========================
 st.header("📊 EDA — 일 단위 데이터")
-c1, c2, c3 = st.
+c1, c2, c3 = st.columns(3)
+with c1:
+    st.metric("행(일 수)", f"{len(df_daily):,}")
+with c2:
+    st.metric("열(특성 수)", f"{df_daily.shape[1]:,}")
+with c3:
+    st.metric("결측 총합", f"{int(df_daily.isna().sum().sum()):,}")
+
+with st.expander("데이터 타입 / 결측치 요약", expanded=False):
+    st.write("**데이터 타입**")
+    st.dataframe(pd.DataFrame(df_daily.dtypes, columns=["dtype"]))
+    st.write("**결측치 합계(열별)**")
+    miss = df_daily.isna().sum()
+    miss_df = miss[miss > 0].to_frame("missing_count")
+    if miss_df.empty:
+        st.success("결측치 없음 ✅")
+    else:
+        st.dataframe(miss_df)
+
+# 숫자형 후보 중 '기온 3종' 자동 후보 지정
+num_cols = df_daily.select_dtypes(include=np.number).columns.tolist()
+heuristic_order = ["tavg", "temp", "tmean", "avg_temp", "tmax", "tmin"]
+default_targets = [c for c in heuristic_order if c in num_cols]
+default_show = default_targets[:2] if default_targets else (num_cols[:2] if len(num_cols) >= 2 else num_cols)
+
+st.subheader("일 단위 라인 차트")
+eda_cols = st.multiselect("표시할 기온(숫자형) 컬럼", options=num_cols, default=default_show)
+if eda_cols:
+    # 여러 컬럼을 겹쳐보기
+    df_melt = df_daily[["date"] + eda_cols].melt("date", var_name="metric", value_name="value")
+    line = alt.Chart(df_melt).mark_line().encode(
+        x="date:T",
+        y=alt.Y("value:Q", title="값"),
+        color="metric:N",
+        tooltip=["date:T", "metric:N", alt.Tooltip("value:Q", format=".2f")]
+    ).properties(height=320)
+    st.altair_chart(line, use_container_width=True)
+else:
+    st.info("표시할 숫자형(기온) 컬럼을 선택해 주세요.")
+
+# =========================
+# 연평균 회귀 (연도 단위)
+# =========================
+st.header("📈 연평균 선형 회귀 — X=연도, Y=선택지표(연평균)")
+# 목표(기온 지표) 선택
+target_choices = default_targets if default_targets else num_cols
+if not target_choices:
+    st.error("연평균 대상이 될 숫자형 컬럼이 필요합니다.")
+    st.stop()
+target_col = st.selectbox("연평균으로 사용할 기온 지표", options=target_choices, index=0)
+
+# 연평균 계산(2% 규칙 적용)
+df_year = compute_yearly_mean(df_daily, target_col=target_col, miss_threshold=miss_threshold)
+
+# 품질 로그
+with st.expander("연도별 품질 로그(결측비율 2% 초과 연도는 제외됨)", expanded=False):
+    df = df_daily.copy()
+    df["year"] = df["date"].dt.year
+    logs = []
+    for y, g in df.groupby("year", dropna=True):
+        n_total = len(g)
+        n_miss = g[target_col].isna().sum()
+        r = (n_miss / n_total) if n_total else np.nan
+        logs.append({"year": int(y), "days": n_total, "missing": int(n_miss), "missing_ratio": r})
+    st.dataframe(pd.DataFrame(logs).sort_values("year"))
+
+st.subheader("연평균 테이블(결측 연도 제외 전)")
+st.dataframe(df_year)
+
+# 회귀에 사용할 데이터(결측 연도 제거)
+df_fit = df_year.dropna(subset=["avg"]).copy()
+
+if len(df_fit) < 3:
+    st.warning("연평균 유효 연도가 충분하지 않습니다(최소 3년 권장). 데이터/결측 임계값을 확인하세요.")
+else:
+    # Train/Test 분할
+    X = df_fit[["year"]]  # X=연도
+    y = df_fit["avg"]
+    # 시간 데이터라 랜덤 분할 대신 과적합을 피하려면 '최근 데이터 테스트'도 가능하지만, 교육 목적 상 간단 분할 사용
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=max(1, int(len(df_fit)*0.2)) / len(df_fit), random_state=42)
+
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    # 호환성: RMSE는 sqrt(MSE)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("훈련 샘플(연도)", f"{len(X_train)}")
+    with c2:
+        st.metric("테스트 샘플(연도)", f"{len(X_test)}")
+    with c3:
+        st.metric("RMSE (테스트)", f"{rmse:.3f}")
+
+    # 회귀식 표시: y = a*year + b
+    a = float(model.coef_[0])
+    b = float(model.intercept_)
+    st.caption(f"회귀식: **avg ≈ {a:.4f} × year + {b:.4f}**")
+
+    # 전체 연도에 대한 예측선
+    df_fit["pred"] = model.predict(df_fit[["year"]])
+
+    chart = (
+        alt.Chart(df_fit).mark_circle(size=70, opacity=0.85).encode(
+            x=alt.X("year:O", title="연도"),
+            y=alt.Y("avg:Q", title=f"연평균 {target_col}"),
+            tooltip=["year:O", alt.Tooltip("avg:Q", format=".2f")]
+        )
+        + alt.Chart(df_fit).mark_line().encode(
+            x="year:O",
+            y="pred:Q"
+        )
+    ).properties(height=360)
+    st.altair_chart(chart, use_container_width=True)
+
+# 푸터: 교육 메모
+st.markdown("---")
+st.markdown("""
+**교육 메모**  
+- EDA는 **일 단위**로 패턴/이상치를 먼저 확인합니다.  
+- 모델링은 **연평균(연도 단위)**로 축약해 **장기 추세**를 간단한 선형회귀로 살펴봅니다.  
+- 한 해의 결측이 일정 비율(기본 2%)을 넘으면 **해당 연도를 제외**해 데이터 품질을 확보합니다.  
+- 필요시 임계값을 바꿔 결과 변화를 관찰해 보세요.
+""")
