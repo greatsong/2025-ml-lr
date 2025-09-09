@@ -197,22 +197,28 @@ if hist_metric:
     ).properties(height=300)
     st.altair_chart(chart_hist, use_container_width=True)
 
-# ③ 박스플랏 — 월 선택 → 모든 연도(합산 1개 박스)
-st.subheader("③ 박스플랏 — 월 선택 → 모든 연도(합산 1개 박스)")
-month_for_all = st.selectbox("월 선택(1~12)", options=list(range(1, 13)), index=0, key="box_month_all")
+# ③ 월별 박스플랏 — 모든 연도 합산 (기본: 12개월 전부, 선택 모드 켜면 일부만)
+st.subheader("③ 월별 박스플랏 — 모든 연도 합산")
+df_month_all = df_daily.copy()
+df_month_all["month"] = df_month_all["date"].dt.month
+
 box_metric_all = st.selectbox("지표 선택", options=(default_targets or num_cols), index=0, key="box_metric_all")
+select_mode = st.checkbox("월 선택 모드(체크 시 선택한 달만 표시)", value=False)
+
+months_options = list(range(1, 13))
+months_selected = months_options if not select_mode else st.multiselect(
+    "표시할 월 선택(1~12)", options=months_options, default=[1, 7, 12]
+)
+
 if box_metric_all:
-    df_month_all = df_daily.copy()
-    df_month_all["month"] = df_month_all["date"].dt.month
-    sub_all = df_month_all[(df_month_all["month"] == month_for_all) & (~df_month_all[box_metric_all].isna())]
+    sub_all = df_month_all[(df_month_all["month"].isin(months_selected)) & (~df_month_all[box_metric_all].isna())]
     if sub_all.empty:
-        st.info("해당 월 데이터가 없습니다.")
+        st.info("해당 조건의 데이터가 없습니다.")
     else:
-        sub_all["label"] = f"{month_for_all:02d}월 (모든 연도)"
-        box_all = alt.Chart(sub_all).mark_boxplot(size=80).encode(
-            x=alt.X("label:N", title="기간"),
+        box_all = alt.Chart(sub_all).mark_boxplot(size=25).encode(
+            x=alt.X("month:O", title="월"),
             y=alt.Y(f"{box_metric_all}:Q", title=f"{box_metric_all}"),
-            tooltip=[alt.Tooltip(f"{box_metric_all}:Q", format=".2f")]
+            tooltip=[alt.Tooltip(f"{box_metric_all}:Q", format=".2f"), "month:O"]
         ).properties(height=320)
         st.altair_chart(box_all, use_container_width=True)
 
@@ -314,7 +320,7 @@ else:
         )
         base_chart = pts + regline
 
-        # 🔮 미래 예측: 완전한 마지막 해 + 1 ~ 2100
+        # 🔮 미래 예측: 완전한 마지막 해 + 1 ~ 2100 (마지막 해만 빨간 점)
         st.subheader("🔮 미래 예측 (마지막 해만 빨간 점 + 레이블)")
 
         max_dt = df_daily["date"].dropna().max()
@@ -369,7 +375,7 @@ else:
 
                 charts = base_chart + chart_future_line + last_point + last_label
 
-                # 단일 연도 예측 버튼을 눌렀다면 그 해도 빨간 점/라벨(요청과 충돌하지 않음: '구간'은 마지막 해만, '단일'은 단일만)
+                # 단일 연도 예측 버튼을 눌렀다면 그 해도 빨간 점/라벨 추가
                 if single_df is not None:
                     single_point = alt.Chart(single_df).mark_point(color="red", size=120).encode(
                         x=alt.X("year:O"), y=alt.Y("pred:Q")
@@ -388,8 +394,9 @@ else:
 st.markdown("---")
 st.markdown("""
 **교육 메모**  
-- 히스토그램으로 전체 분포를, 월별 박스플랏으로 연도 간 계절 분포의 차이를 살펴보세요.  
-- "월→여러 연도 박스플랏"으로 특정 월의 연도별 분포를 한눈에 비교할 수 있습니다.  
+- 히스토그램으로 전체 분포를, 월별 박스플랏으로 계절 분포를 확인하세요.  
+- ③은 기본 12개월 모두를 박스플랏으로 보여주며, 체크박스로 월 선택 모드를 켜면 일부 월만 볼 수 있습니다.  
+- ④는 특정 월에 대해 여러 연도를 나란히 비교합니다.  
 - 학습 구간 슬라이더로 회귀선이 어떻게 바뀌는지(추세 추정의 민감도)를 실습해 보세요.  
-- 미래 예측은 **마지막 ‘완전한’ 연도 다음 해부터** 2100년까지 허용하며, 예측 시각화는 **예측 구간의 '마지막 해'만** 빨간 점과 레이블로 표시됩니다.
+- 미래 예측은 **마지막 ‘완전한’ 연도 다음 해부터** 2100년까지 허용하며, 시각화는 **예측 구간의 '마지막 해'만** 빨간 점과 레이블로 강조합니다.
 """)
