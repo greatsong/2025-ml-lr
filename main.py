@@ -67,8 +67,8 @@ def load_default_or_simulated(skip_top_rows=7):
 # 문자열 숫자화 (℃/공백/기호 제거)
 def to_numeric_strict(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.replace(",", ".", regex=False)
-    s = s.str.replace(r"[^-\d\.]", "", regex=True)
-    return pd.to_numeric(s, errors="coerce")
+    s = s.str_replace = s.str.replace(r"[^-\d\.]", "", regex=True)
+    return pd.to_numeric(s.str_replace, errors="coerce")
 
 # =========================
 # 연평균 계산 — '완전한 연도'만 유지
@@ -449,6 +449,9 @@ else:
                 # 시즌 순서(평균기온 낮→높)
                 season_order = (dfKc.groupby("season_unsup")["temp_mean"].mean()
                                 .sort_values().reset_index()["season_unsup"].tolist())
+                hottest_label = season_order[-1]  # ✅ 가장 더운 계절(여름/더움 등)
+                coldest_label = season_order[0]   # (필요시 사용)
+
                 # 연도-시즌별 일수
                 counts = dfKc.groupby(["year", "season_unsup"]).size().reset_index(name="days")
 
@@ -461,9 +464,10 @@ else:
                 ).properties(height=360)
                 st.altair_chart(line_season, use_container_width=True)
 
-                # ④ 계절 선택 → 길이 추세
+                # ④ 계절 선택 → 길이 추세 (기본: 가장 더운 계절)
                 st.subheader("④ 계절 길이 추세")
-                season_to_view = st.selectbox("추세를 볼 계절 선택", options=season_order, index=(season_order.index("여름") if "여름" in season_order else 0))
+                default_idx = season_order.index(hottest_label) if hottest_label in season_order else len(season_order) - 1
+                season_to_view = st.selectbox("추세를 볼 계절 선택", options=season_order, index=default_idx)
                 sel_counts = counts[counts["season_unsup"] == season_to_view].copy()
                 if sel_counts.empty:
                     st.info(f"{season_to_view} 데이터가 없습니다.")
@@ -484,33 +488,30 @@ else:
                         st.altair_chart(base, use_container_width=True)
                         st.info("추세선을 그리기에 연도 수가 부족합니다.")
 
-                # ⑤ 계절 전이 시점 — 여름 (첫/마지막)
-                if "여름" in season_order:
-                    st.subheader("⑤ 여름 전이 시점 (첫/마지막 여름 날짜)")
-                    summer_df = dfKc[dfKc["season_unsup"] == "여름"].copy()
-                    if summer_df.empty:
-                        st.info("여름 데이터가 부족합니다.")
-                    else:
-                        trans = summer_df.groupby("year").agg(
-                            first_summer=("date", "min"),
-                            last_summer=("date", "max")
-                        ).reset_index()
+                # ⑤ 계절 전이 시점 — 가장 더운 계절(여름/더움 등)
+                st.subheader(f"⑤ {hottest_label} 전이 시점 (첫/마지막 {hottest_label} 날짜)")
+                hot_df = dfKc[dfKc["season_unsup"] == hottest_label].copy()
+                if hot_df.empty:
+                    st.info(f"{hottest_label} 데이터가 부족합니다.")
+                else:
+                    trans = hot_df.groupby("year").agg(
+                        first_hot=("date", "min"),
+                        last_hot=("date", "max")
+                    ).reset_index()
 
-                        # 첫 여름 날짜 추세
-                        first_chart = alt.Chart(trans).mark_line(point=True).encode(
-                            x=alt.X("year:O", title="연도"),
-                            y=alt.Y("first_summer:T", title="첫 여름 도달일"),
-                            tooltip=["year:O", alt.Tooltip("first_summer:T", title="첫 여름")]
-                        ).properties(height=200)
+                    first_chart = alt.Chart(trans).mark_line(point=True).encode(
+                        x=alt.X("year:O", title="연도"),
+                        y=alt.Y("first_hot:T", title=f"첫 {hottest_label} 도달일"),
+                        tooltip=["year:O", alt.Tooltip("first_hot:T", title=f"첫 {hottest_label}")]
+                    ).properties(height=200)
 
-                        # 마지막 여름 날짜 추세
-                        last_chart = alt.Chart(trans).mark_line(point=True, color="red").encode(
-                            x=alt.X("year:O", title="연도"),
-                            y=alt.Y("last_summer:T", title="마지막 여름 종료일"),
-                            tooltip=["year:O", alt.Tooltip("last_summer:T", title="마지막 여름")]
-                        ).properties(height=200)
+                    last_chart = alt.Chart(trans).mark_line(point=True, color="red").encode(
+                        x=alt.X("year:O", title="연도"),
+                        y=alt.Y("last_hot:T", title=f"마지막 {hottest_label} 종료일"),
+                        tooltip=["year:O", alt.Tooltip("last_hot:T", title=f"마지막 {hottest_label}")]
+                    ).properties(height=200)
 
-                        st.altair_chart(first_chart & last_chart, use_container_width=True)
+                    st.altair_chart(first_chart & last_chart, use_container_width=True)
 
 # =========================
 # 🟪 연-월 히트맵
@@ -541,8 +542,8 @@ st.markdown("---")
 st.markdown("""
 **교육 메모**  
 - K-means는 최저/최고기온 분포로 계절을 비지도 분류합니다.  
-- K=4일 때: (평균기온 낮→높) 순으로 **겨울·봄·가을·여름**에 자동 매핑됩니다.  
-- ④에서 원하는 **계절을 선택**해 길이 추세를 확인할 수 있습니다.  
-- ⑤는 **여름의 시작/종료일(전이 시점)**이 연도별로 어떻게 변하는지 보여줍니다.  
+- K=4면 (평균기온 낮→높) **겨울·봄·가을·여름**에 자동 매핑됩니다.  
+- ④에서 원하는 **계절을 선택**해 길이 추세를 확인할 수 있습니다. 기본은 **가장 더운 계절**입니다.  
+- ⑤는 **가장 더운 계절(여름/더움 등)의 시작·종료일(전이 시점)**이 연도별로 어떻게 변하는지 보여줍니다.  
 - 히트맵은 연·월 평균을 한눈에 보여 계절성/추세 확인에 유용합니다.
 """)
