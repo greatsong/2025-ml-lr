@@ -148,9 +148,9 @@ heuristic_order = ["tavg", "temp", "tmean", "avg_temp", "tmax", "tmin", "평균�
 default_targets = [c for c in heuristic_order if c in num_cols]
 default_show = default_targets[:2] if default_targets else (num_cols[:2] if len(num_cols) >= 2 else num_cols)
 base_color_map = {
-    "tmax": "red", "최고기온": "red",
+    "tmax": "red", "최고기온(℃)": "red",
     "tavg": "green", "temp": "green", "tmean": "green", "avg_temp": "green", "평균기온": "green",
-    "tmin": "blue", "최저기온": "blue"
+    "tmin": "blue", "최저기온(℃)": "blue"
 }
 
 # =========================
@@ -241,7 +241,7 @@ if years_for_multi and box_metric_multi:
 # 연평균 회귀 + 미래예측(마지막 해만 빨간점)
 # =========================
 st.header("📈 연평균 선형 회귀 — X=연도, Y=선택지표(연평균)")
-target_choices = [c for c in ["tavg", "temp", "tmean", "avg_temp", "평균기온", "tmax", "최고기온", "tmin", "최저기온"] if c in num_cols] or num_cols
+target_choices = [c for c in ["tavg", "temp", "tmean", "avg_temp", "평균기온(℃)", "tmax", "최고기온(℃)", "tmin", "최저기온(℃)"] if c in num_cols] or num_cols
 if not target_choices:
     st.error("연평균 대상이 될 숫자형 컬럼이 필요합니다."); st.stop()
 target_col = st.selectbox("연평균으로 사용할 기온 지표", options=target_choices, index=0)
@@ -324,8 +324,8 @@ else:
 st.header("🌈 K-means 비지도 계절 구분 — tmin/tmax 기반")
 
 # tmin/tmax 열 찾기
-tmin_candidates = [c for c in ["tmin", "최저기온"] if c in df_daily.columns]
-tmax_candidates = [c for c in ["tmax", "최고기온"] if c in df_daily.columns]
+tmin_candidates = [c for c in ["tmin", "최저기온(℃)"] if c in df_daily.columns]
+tmax_candidates = [c for c in ["tmax", "최고기온(℃)"] if c in df_daily.columns]
 if not tmin_candidates or not tmax_candidates:
     st.info("tmin / tmax(또는 최저기온 / 최고기온) 컬럼이 필요합니다.")
 else:
