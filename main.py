@@ -144,7 +144,7 @@ df_daily["date"] = pd.to_datetime(df_daily["date"], errors="coerce")
 # 컬럼 힌트/색상
 # =========================
 num_cols = df_daily.select_dtypes(include=np.number).columns.tolist()
-heuristic_order = ["tavg", "temp", "tmean", "avg_temp", "tmax", "tmin", "평균기온", "최고기온", "최저기온"]
+heuristic_order = ["tavg", "temp", "tmean", "avg_temp", "tmax", "tmin", "평균기온(℃)", "최고기온(℃)", "최저기온(℃)"]
 default_targets = [c for c in heuristic_order if c in num_cols]
 default_show = default_targets[:2] if default_targets else (num_cols[:2] if len(num_cols) >= 2 else num_cols)
 base_color_map = {
