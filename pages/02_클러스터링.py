@@ -11,6 +11,24 @@ from lib import find_latest_csv, smart_read_csv, normalize_and_parse, to_numeric
 st.set_page_config(page_title="🌈 K-means 클러스터링", layout="wide")
 st.title("🌈 K-means 비지도 계절 구분 — 최저/최고기온 기반")
 
+# =====================================
+# 계절 색상 팔레트 (요청 반영)
+# 봄: 노랑(개나리), 여름: 빨강, 가을: 단풍색, 겨울: 하늘색
+# =====================================
+SEASON_COLORS = {
+    "봄":   "#FFD700",  # 노랑(개나리)
+    "여름": "#FF0000",  # 빨강
+    "가을": "#D2691E",  # 단풍색(초콜릿톤)
+    "겨울": "#1E90FF",  # 하늘색(겨울왕국)
+}
+def season_color_encoding(present_labels):
+    """present_labels(list[str]) 중 사전에 있는 계절만 색 지정. (그 외 라벨은 Altair 기본색)"""
+    domain = [s for s in ["겨울","봄","가을","여름"] if s in present_labels]
+    if not domain:
+        return alt.Color("season_unsup:N")  # 지정 색 없음 → 기본
+    rng = [SEASON_COLORS[d] for d in domain]
+    return alt.Color("season_unsup:N", scale=alt.Scale(domain=domain, range=rng))
+
 # =========================
 # 사이드바 & 데이터 로딩
 # =========================
@@ -122,16 +140,14 @@ if k_clusters == 4:
     if season_split_method == "사후 규칙(연도 내 순서)":
         # 중간 두 개(봄/가을 후보)를 합쳐 '중간'으로 보고 달력 순서로 분리
         mid_clusters = cluster_order[1:3]
-        # 먼저 임시 라벨
         dfK["season_unsup"] = dfK["cluster"].map(season_map)
-        # 중간 클러스터들만 다시 재라벨링: DOY 기준으로 전반=봄, 후반=가을
-        # 경계는 7/1(DOY≈182)로 설정
+        # 경계는 7/1(DOY≈183)로 설정
         bound = 183
         mask_mid = dfK["cluster"].isin(mid_clusters)
-        dfK.loc[mask_mid & (dfK["doy"] < bound), "season_unsup"] = "봄"
+        dfK.loc[mask_mid & (dfK["doy"] < bound),  "season_unsup"] = "봄"
         dfK.loc[mask_mid & (dfK["doy"] >= bound), "season_unsup"] = "가을"
     else:
-        # DOY 인코딩 시에는 온도+시기를 함께 학습했으므로 기본 매핑 유지
+        # DOY 인코딩: 온도+시기를 함께 학습했으므로 기본 매핑 유지
         dfK["season_unsup"] = dfK["cluster"].map(season_map)
 else:
     mids = [f"중간{i+1}" for i in range(max(k_clusters-2, 0))]
@@ -146,13 +162,15 @@ hottest_label = season_order[-1]
 coldest_label = season_order[0]
 
 # =========================
-# ① tmin–tmax 산점도 (클러스터/계절 색)
+# ① tmin–tmax 산점도 (계절 색)
 # =========================
 st.subheader("① tmin–tmax 산점도 (계절 색)")
+present_labels = dfK["season_unsup"].dropna().unique().tolist()
+color_enc = season_color_encoding(present_labels)
 scatter = alt.Chart(dfK).mark_point(filled=True, opacity=0.6).encode(
     x=alt.X(f"{tmin_col}:Q", title=tmin_col),
     y=alt.Y(f"{tmax_col}:Q", title=tmax_col),
-    color=alt.Color("season_unsup:N"),
+    color=color_enc,
     tooltip=["date:T", f"{tmin_col}:Q", f"{tmax_col}:Q", "season_unsup:N"]
 ).properties(height=360)
 st.altair_chart(scatter, use_container_width=True)
@@ -162,10 +180,12 @@ st.altair_chart(scatter, use_container_width=True)
 # =========================
 st.subheader("② 연도별 계절 일수 추세")
 counts = dfK.groupby(["year", "season_unsup"]).size().reset_index(name="days")
+present_labels2 = counts["season_unsup"].dropna().unique().tolist()
+color_enc2 = season_color_encoding(present_labels2)
 line_all = alt.Chart(counts).mark_line(point=True).encode(
     x=alt.X("year:O", title="연도"),
     y=alt.Y("days:Q", title="일수"),
-    color=alt.Color("season_unsup:N", sort=season_order),
+    color=color_enc2,
     tooltip=["year:O", "season_unsup:N", "days:Q"]
 ).properties(height=360)
 st.altair_chart(line_all, use_container_width=True)
@@ -179,7 +199,9 @@ season_to_view = st.selectbox("추세를 볼 계절", options=season_order, inde
 sel = counts[counts["season_unsup"] == season_to_view].copy()
 if not sel.empty:
     base = alt.Chart(sel).mark_line(point=True).encode(
-        x="year:O", y=alt.Y("days:Q", title=f"{season_to_view} 일수"),
+        x="year:O",
+        y=alt.Y("days:Q", title=f"{season_to_view} 일수"),
+        color=alt.value(SEASON_COLORS.get(season_to_view, None)),  # 해당 계절 고정색
         tooltip=["year:O", "days:Q"]
     ).properties(height=300)
     if sel["year"].nunique() >= 3:
@@ -195,7 +217,7 @@ else:
     st.info(f"{season_to_view} 데이터 없음")
 
 # =========================
-# ④ {가장 더운 계절} 전이 시점 — 첫/마지막 (DOY 기반)
+# ④ {가장 더운 계절} 전이 시점 — 첫/마지막 (연중일수)
 # =========================
 st.subheader(f"④ {hottest_label} 전이 시점 — 첫/마지막 (연중일수)")
 hot_df = dfK[dfK["season_unsup"] == hottest_label].copy()
@@ -215,16 +237,17 @@ else:
     all_years = pd.DataFrame({"year": sorted(dfK["year"].unique())})
     trans = all_years.merge(trans, on="year", how="left")
 
-    # 첫 도달일
-    ch_first = alt.Chart(trans).mark_line(point=True).encode(
+    # 첫 도달일(해당 계절 색)
+    first_color = SEASON_COLORS.get(hottest_label, None)
+    ch_first = alt.Chart(trans).mark_line(point=True, color=first_color).encode(
         x=alt.X("year:O", title="연도"),
         y=alt.Y("first_hot_doy:Q", title=f"첫 {hottest_label} (연중 일수)"),
         tooltip=["year:O",
                  alt.Tooltip("first_hot_label:N", title=f"첫 {hottest_label}"),
                  alt.Tooltip("first_hot_doy:Q", title="연중일수")]
     ).properties(height=220, title=f"첫 {hottest_label} 도달 — 낮을수록 빨라짐")
-    # 마지막 종료일
-    ch_last = alt.Chart(trans).mark_line(point=True, color="red").encode(
+    # 마지막 종료일(같은 계절색의 약간 어두운 톤이 필요하면 별도 지정 가능)
+    ch_last = alt.Chart(trans).mark_line(point=True, color=first_color).encode(
         x=alt.X("year:O", title="연도"),
         y=alt.Y("last_hot_doy:Q", title=f"마지막 {hottest_label} (연중 일수)"),
         tooltip=["year:O",
@@ -232,7 +255,7 @@ else:
                  alt.Tooltip("last_hot_doy:Q", title="연중일수")]
     ).properties(height=220, title=f"마지막 {hottest_label} 종료 — 높을수록 늦어짐")
 
-    # 간단 추세선
+    # 간단 추세선(오렌지)
     layers_first = [ch_first]
     df_fit_first = trans.dropna(subset=["first_hot_doy"])
     if df_fit_first["year"].nunique() >= 3:
@@ -276,5 +299,6 @@ with st.expander("교육 메모", expanded=False):
     st.markdown("""
 - **주기 인코딩(DOY)**: 날짜를 sin/cos로 변환해 **연중 시기** 정보를 피처에 녹입니다 → 같은 온도라도 4월/10월이 자연스럽게 분리.
 - **사후 규칙**: 중간 온도대(봄·가을 후보)를 **달력 순서(7/1 기준)**로 앞=봄, 뒤=가을로 라벨링합니다.
-- **전이 시점(DOY)**: 연도를 제거하고 연중일수로 비교해, **얼마나 빨라졌는지/늦어졌는지** 해석이 쉬워집니다.
+- **색상 팔레트**: 봄=노랑, 여름=빨강, 가을=단풍색, 겨울=하늘색으로 통일해 해석을 돕습니다.
+- **전이 시점(DOY)**: 연도를 제거한 연중일수로 비교해, **얼마나 빨라졌는지/늦어졌는지**를 직접적으로 해석합니다.
 """)
