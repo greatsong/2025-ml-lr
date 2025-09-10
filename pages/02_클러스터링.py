@@ -147,26 +147,85 @@ else:
     st.info(f"{season_to_view} 데이터 없음")
 
 # ④ 전이 시점 — 가장 더운 계절(여름/더움 등)
-st.subheader(f"④ {hottest_label} 전이 시점 (첫/마지막 {hottest_label} 날짜)")
+st.subheader(f"④ {hottest_label} 전이 시점 (첫/마지막 {hottest_label})")
+
 hot_df = dfKc[dfKc["season_unsup"] == hottest_label].copy()
 if hot_df.empty:
     st.info(f"{hottest_label} 데이터가 부족합니다.")
 else:
-    trans = hot_df.groupby("year").agg(
-        first_hot=("date", "min"),
-        last_hot=("date", "max")
-    ).reset_index()
-    first_chart = alt.Chart(trans).mark_line(point=True).encode(
+    trans = (hot_df
+             .groupby("year")
+             .agg(first_hot=("date", "min"),
+                  last_hot=("date", "max"))
+             .reset_index())
+
+    # ✅ 연도 효과 제거: 연중 일수(DOY)로 변환
+    trans["first_hot_doy"] = trans["first_hot"].dt.dayofyear
+    trans["last_hot_doy"]  = trans["last_hot"].dt.dayofyear
+    # 보기 좋은 라벨(툴팁용)
+    trans["first_hot_label"] = trans["first_hot"].dt.strftime("%m-%d")
+    trans["last_hot_label"]  = trans["last_hot"].dt.strftime("%m-%d")
+
+    # (선택) 시즌 길이(연속성 가정): last - first + 1
+    trans["hot_span_days"] = (trans["last_hot_doy"] - trans["first_hot_doy"] + 1).clip(lower=0)
+
+    # 결측 연도 채우기(연속 축 보기 좋게)
+    all_years = pd.DataFrame({"year": sorted(dfKc["year"].unique())})
+    trans = all_years.merge(trans, on="year", how="left")
+
+    # 첫/마지막 도달 '연중일수' 추세
+    base_first = alt.Chart(trans).mark_line(point=True).encode(
         x=alt.X("year:O", title="연도"),
-        y=alt.Y("first_hot:T", title=f"첫 {hottest_label} 도달일"),
-        tooltip=["year:O", alt.Tooltip("first_hot:T", title=f"첫 {hottest_label}")]
-    ).properties(height=200)
-    last_chart = alt.Chart(trans).mark_line(point=True, color="red").encode(
+        y=alt.Y("first_hot_doy:Q", title=f"첫 {hottest_label} (연중 일수)"),
+        tooltip=["year:O",
+                 alt.Tooltip("first_hot_label:N", title=f"첫 {hottest_label}"),
+                 alt.Tooltip("first_hot_doy:Q", title="연중일수")]
+    ).properties(height=220, title=f"첫 {hottest_label} 도달 — 연중일수(낮을수록 빨라짐)")
+
+    base_last = alt.Chart(trans).mark_line(point=True, color="red").encode(
         x=alt.X("year:O", title="연도"),
-        y=alt.Y("last_hot:T", title=f"마지막 {hottest_label} 종료일"),
-        tooltip=["year:O", alt.Tooltip("last_hot:T", title=f"마지막 {hottest_label}")]
-    ).properties(height=200)
-    st.altair_chart(first_chart & last_chart, use_container_width=True)
+        y=alt.Y("last_hot_doy:Q", title=f"마지막 {hottest_label} (연중 일수)"),
+        tooltip=["year:O",
+                 alt.Tooltip("last_hot_label:N", title=f"마지막 {hottest_label}"),
+                 alt.Tooltip("last_hot_doy:Q", title="연중일수")]
+    ).properties(height=220, title=f"마지막 {hottest_label} 종료 — 연중일수(높을수록 늦어짐)")
+
+    # (옵션) 단순 선형 추세선
+    charts = []
+    for col, color in [("first_hot_doy", None), ("last_hot_doy", "red")]:
+        df_fit = trans.dropna(subset=[col]).copy()
+        if df_fit["year"].nunique() >= 3:
+            lr = LinearRegression().fit(df_fit[["year"]].astype(int), df_fit[col])
+            df_fit["pred"] = lr.predict(df_fit[["year"]].astype(int))
+            slope = float(lr.coef_[0])  # +면 해마다 늦어짐(day/yr), -면 빨라짐
+            slope_label = f"{'첫' if col=='first_hot_doy' else '마지막'} {hottest_label} 추세: {slope:+.2f} 일/년"
+            trend = alt.Chart(df_fit).mark_line(color=color or "orange").encode(
+                x="year:O", y="pred:Q"
+            ).properties(title=slope_label)
+            charts.append(trend)
+
+    st.altair_chart(base_first + (charts[0] if charts else alt.Layer()), use_container_width=True)
+    st.altair_chart(base_last + (charts[1] if len(charts) > 1 else alt.Layer()), use_container_width=True)
+
+    # (옵션) 시즌 길이 추세도 같이 보고 싶으면:
+    with st.expander("시즌 길이(연속 가정) 추세 보기", expanded=False):
+        span = trans.dropna(subset=["hot_span_days"]).copy()
+        if span["year"].nunique() >= 3:
+            lr_span = LinearRegression().fit(span[["year"]].astype(int), span["hot_span_days"])
+            span["pred"] = lr_span.predict(span[["year"]].astype(int))
+            slope_span = float(lr_span.coef_[0])
+            st.metric("더운 시즌 길이 변화", f"{slope_span:+.2f} 일/년")
+            st.altair_chart(
+                alt.Chart(span).mark_line(point=True).encode(
+                    x="year:O",
+                    y=alt.Y("hot_span_days:Q", title=f"{hottest_label} 길이(일)")
+                ).properties(height=220)
+                + alt.Chart(span).mark_line(color="orange").encode(x="year:O", y="pred:Q"),
+                use_container_width=True
+            )
+        else:
+            st.info("시즌 길이 추세를 그리기에 연도 수가 부족합니다.")
+
 
 st.markdown("---")
 st.caption("교육 메모: K가 달라도 ‘가장 더운 계절’을 자동 인식해 전이 시점을 산출합니다.")
