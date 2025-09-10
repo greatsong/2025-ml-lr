@@ -210,7 +210,7 @@ if hist_metric:
         use_container_width=True
     )
 
-# ③ 월별 박스플랏 — 모든 연도 합산 (기본 12개월, 선택 모드 시 일부만)
+# ③ 월별 박스플랏 — 모든 연도 합산
 st.subheader("③ 월별 박스플랏 — 모든 연도 합산")
 df_month_all = df.copy()
 df_month_all["month"] = df_month_all["date"].dt.month
@@ -404,7 +404,7 @@ else:
         cluster_means = dfK.groupby("cluster")["temp_mean"].mean().sort_values().reset_index()
 
         if k_clusters == 4:
-            season_names = ["겨울", "봄", "가을", "여름"]  # 낮은→높은
+            season_names = ["겨울", "봄", "가을", "여름"]  # (평균 낮→높)
             season_map = {row.cluster: season_names[i] for i, row in enumerate(cluster_means.itertuples(index=False, name="Row"))}
         else:
             mid = [f"중간{i+1}" for i in range(k_clusters-2)]
@@ -446,9 +446,13 @@ else:
             if dfKc.empty:
                 st.info("완전한 연도 구간 내 데이터가 없습니다.")
             else:
+                # 시즌 순서(평균기온 낮→높)
                 season_order = (dfKc.groupby("season_unsup")["temp_mean"].mean()
                                 .sort_values().reset_index()["season_unsup"].tolist())
+                # 연도-시즌별 일수
                 counts = dfKc.groupby(["year", "season_unsup"]).size().reset_index(name="days")
+
+                # 전체 라인
                 line_season = alt.Chart(counts).mark_line(point=True).encode(
                     x=alt.X("year:O", title="연도"),
                     y=alt.Y("days:Q", title="일수"),
@@ -457,51 +461,56 @@ else:
                 ).properties(height=360)
                 st.altair_chart(line_season, use_container_width=True)
 
-                # ▶ 여름 길이 추세 (K=4일 때만 '여름' 고정)
-                if "여름" in counts["season_unsup"].unique():
-                    summer = counts[counts["season_unsup"] == "여름"].copy()
-                    if len(summer["year"].unique()) >= 3:
-                        lr = LinearRegression().fit(summer[["year"]].astype(int), summer["days"])
-                        summer["pred"] = lr.predict(summer[["year"]].astype(int))
-                        slope_per_year = float(lr.coef_[0]); slope_per_decade = slope_per_year * 10
-                        trend = alt.Chart(summer).mark_line(color="red").encode(x="year:O", y="pred:Q")
-                        st.altair_chart(
-                            alt.layer(
-                                alt.Chart(summer).mark_line(point=True).encode(x="year:O", y="days:Q"),
-                                trend
-                            ).properties(title="여름 일수 추세(회귀선)"),
-                            use_container_width=True
-                        )
-                        st.metric("여름 일수 변화(추세선 기울기)", f"{slope_per_year:+.2f} 일/년  ≈  {slope_per_decade:+.1f} 일/10년")
-
-                # ▶ 봄+가을 = '중간계절' 길이 추세
-                st.subheader("봄+가을 합친 '중간계절' 길이 추세")
-                if k_clusters == 4 and {"봄","가을"}.issubset(set(counts["season_unsup"].unique())):
-                    mid = (counts[counts["season_unsup"].isin(["봄","가을"])]
-                           .groupby("year")["days"].sum().reset_index(name="mid_days"))
+                # ④ 계절 선택 → 길이 추세
+                st.subheader("④ 계절 길이 추세")
+                season_to_view = st.selectbox("추세를 볼 계절 선택", options=season_order, index=(season_order.index("여름") if "여름" in season_order else 0))
+                sel_counts = counts[counts["season_unsup"] == season_to_view].copy()
+                if sel_counts.empty:
+                    st.info(f"{season_to_view} 데이터가 없습니다.")
                 else:
-                    # K≠4: 극단(가장 차가운 그룹, 가장 더운 그룹)을 제외한 모든 시즌을 중간계절로
-                    season_by_mean = dfKc.groupby("season_unsup")["temp_mean"].mean().sort_values()
-                    coldest = season_by_mean.index[0]
-                    hottest = season_by_mean.index[-1]
-                    mid = (counts[~counts["season_unsup"].isin([coldest, hottest])]
-                           .groupby("year")["days"].sum().reset_index(name="mid_days"))
+                    base = alt.Chart(sel_counts).mark_line(point=True).encode(
+                        x=alt.X("year:O", title="연도"),
+                        y=alt.Y("days:Q", title=f"{season_to_view} 일수"),
+                        tooltip=["year:O", "days:Q"]
+                    ).properties(height=320)
+                    if len(sel_counts["year"].unique()) >= 3:
+                        lr = LinearRegression().fit(sel_counts[["year"]].astype(int), sel_counts["days"])
+                        sel_counts["pred"] = lr.predict(sel_counts[["year"]].astype(int))
+                        slope = float(lr.coef_[0]); slope_dec = slope * 10
+                        trend = alt.Chart(sel_counts).mark_line(color="orange").encode(x="year:O", y="pred:Q")
+                        st.altair_chart(base + trend, use_container_width=True)
+                        st.metric(f"{season_to_view} 변화(추세 기울기)", f"{slope:+.2f} 일/년  ≈  {slope_dec:+.1f} 일/10년")
+                    else:
+                        st.altair_chart(base, use_container_width=True)
+                        st.info("추세선을 그리기에 연도 수가 부족합니다.")
 
-                if len(mid) >= 3:
-                    lr_mid = LinearRegression().fit(mid[["year"]].astype(int), mid["mid_days"])
-                    mid["pred"] = lr_mid.predict(mid[["year"]].astype(int))
-                    slope_mid_per_year = float(lr_mid.coef_[0])
-                    slope_mid_per_decade = slope_mid_per_year * 10
-                    chart_mid = alt.layer(
-                        alt.Chart(mid).mark_line(point=True).encode(
-                            x="year:O", y=alt.Y("mid_days:Q", title="중간계절(일)")
-                        ),
-                        alt.Chart(mid).mark_line(color="orange").encode(x="year:O", y="pred:Q")
-                    ).properties(height=320, title="중간계절(봄+가을) 길이 추세")
-                    st.altair_chart(chart_mid, use_container_width=True)
-                    st.metric("중간계절 변화(추세선 기울기)", f"{slope_mid_per_year:+.2f} 일/년  ≈  {slope_mid_per_decade:+.1f} 일/10년")
-                else:
-                    st.info("중간계절 추세선을 그리기에 연도 수가 부족합니다.")
+                # ⑤ 계절 전이 시점 — 여름 (첫/마지막)
+                if "여름" in season_order:
+                    st.subheader("⑤ 여름 전이 시점 (첫/마지막 여름 날짜)")
+                    summer_df = dfKc[dfKc["season_unsup"] == "여름"].copy()
+                    if summer_df.empty:
+                        st.info("여름 데이터가 부족합니다.")
+                    else:
+                        trans = summer_df.groupby("year").agg(
+                            first_summer=("date", "min"),
+                            last_summer=("date", "max")
+                        ).reset_index()
+
+                        # 첫 여름 날짜 추세
+                        first_chart = alt.Chart(trans).mark_line(point=True).encode(
+                            x=alt.X("year:O", title="연도"),
+                            y=alt.Y("first_summer:T", title="첫 여름 도달일"),
+                            tooltip=["year:O", alt.Tooltip("first_summer:T", title="첫 여름")]
+                        ).properties(height=200)
+
+                        # 마지막 여름 날짜 추세
+                        last_chart = alt.Chart(trans).mark_line(point=True, color="red").encode(
+                            x=alt.X("year:O", title="연도"),
+                            y=alt.Y("last_summer:T", title="마지막 여름 종료일"),
+                            tooltip=["year:O", alt.Tooltip("last_summer:T", title="마지막 여름")]
+                        ).properties(height=200)
+
+                        st.altair_chart(first_chart & last_chart, use_container_width=True)
 
 # =========================
 # 🟪 연-월 히트맵
@@ -517,7 +526,6 @@ else:
     hm = (df_hm.groupby(["year","month"])[hm_metric]
           .mean()
           .reset_index(name="val"))
-    # 가독성: 최근 연도 우측으로 보이도록 year를 오름차순
     heat = alt.Chart(hm).mark_rect().encode(
         x=alt.X("month:O", title="월"),
         y=alt.Y("year:O", title="연도"),
@@ -534,6 +542,7 @@ st.markdown("""
 **교육 메모**  
 - K-means는 최저/최고기온 분포로 계절을 비지도 분류합니다.  
 - K=4일 때: (평균기온 낮→높) 순으로 **겨울·봄·가을·여름**에 자동 매핑됩니다.  
-- '중간계절'은 **봄+가을**(K=4) 혹은 **극단(추움/더움) 제외 나머지**(K≠4)로 정의했습니다.  
-- 히트맵은 연-월 평균을 한눈에 보여 계절성/추세 확인에 유용합니다.
+- ④에서 원하는 **계절을 선택**해 길이 추세를 확인할 수 있습니다.  
+- ⑤는 **여름의 시작/종료일(전이 시점)**이 연도별로 어떻게 변하는지 보여줍니다.  
+- 히트맵은 연·월 평균을 한눈에 보여 계절성/추세 확인에 유용합니다.
 """)
